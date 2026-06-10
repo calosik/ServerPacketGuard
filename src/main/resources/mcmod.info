@@ -1,0 +1,15 @@
+[
+  {
+    "modid": "serverpacketguard",
+    "name": "Server Packet Guard",
+    "description": "Server-side mod that blocks malicious custom mod packets from cheat clients",
+    "version": "${version}",
+    "mcversion": "${mcversion}",
+    "url": "",
+    "authorList": [],
+    "credits": "",
+    "logoFile": "",
+    "screenshots": [],
+    "dependencies": []
+  }
+]
