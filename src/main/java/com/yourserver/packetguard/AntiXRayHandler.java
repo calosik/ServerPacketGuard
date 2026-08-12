@@ -49,10 +49,18 @@ public class AntiXRayHandler extends ChannelOutboundHandlerAdapter {
     // S26 field discovery — сканируем по типу, независимо от SRG-имён
     // -------------------------------------------------------------------------
 
-    private static final Field S26_COMPRESSED;   // byte[]
-    private static final Field S26_PRIMARIES;    // int[]
-    private static final Field S26_ADDS;         // int[]
-    private static final Field S26_LENGTH;       // int (может быть null)
+    private static final Field S26_COMPRESSED;         // byte[]
+    private static final Field S26_LENGTH;              // int (может быть null)
+    private static final List<Field> S26_INT_ARRAYS;    // все int[]-поля класса — кандидаты на роль primaries/adds
+
+    // primaries/adds не выбираются по позиции в getDeclaredFields(): порядок объявления полей
+    // НЕ гарантирован спецификацией JVM. Вместо этого роли определяются один раз по первому
+    // реальному S26-пакету — см. resolveS26Roles().
+    private static volatile Field s26Primaries;
+    private static volatile Field s26Adds;
+    private static volatile boolean s26ResolutionFailed;
+    private static int s26ResolutionAttempts;
+    private static final int S26_MAX_RESOLUTION_ATTEMPTS = 5;
 
     static {
         Field compressed = null, length = null;
@@ -73,16 +81,61 @@ public class AntiXRayHandler extends ChannelOutboundHandlerAdapter {
             }
         }
 
-        // Порядок int[] в MC 1.7.10: [xCoords, zCoords, primaryBitmaps, addBitmaps]
-        int n = intArrays.size();
         S26_COMPRESSED = compressed;
         S26_LENGTH     = length;
-        S26_PRIMARIES  = n >= 2 ? intArrays.get(n - 2) : null;
-        S26_ADDS       = n >= 2 ? intArrays.get(n - 1) : null;
+        S26_INT_ARRAYS = intArrays;
     }
 
     AntiXRayHandler(EntityPlayerMP player) {
         this.player = player;
+    }
+
+    /**
+     * Определяет, какие два int[]-поля из S26_INT_ARRAYS — это primaryBitMaps и addBitMaps,
+     * без предположений о порядке объявления полей. Перебирает все упорядоченные пары кандидатов
+     * и проверяет, даёт ли пара {primaries, adds} длину распакованных данных, совпадающую
+     * с фактической длиной raw — это единственный надёжный инвариант, доступный без знания
+     * точных SRG-имён полей для конкретной сборки/маппинга.
+     */
+    private static synchronized boolean resolveS26Roles(Object packet, byte[] raw, int sectionBytes) {
+        if (s26Primaries != null) return true;
+        if (s26ResolutionFailed) return false;
+
+        try {
+            for (Field a : S26_INT_ARRAYS) {
+                int[] va = (int[]) a.get(packet);
+                if (va == null) continue;
+                for (Field b : S26_INT_ARRAYS) {
+                    if (a == b) continue;
+                    int[] vb = (int[]) b.get(packet);
+                    if (vb == null || vb.length != va.length) continue;
+
+                    int expected = 0;
+                    for (int i = 0; i < va.length; i++) {
+                        expected += Integer.bitCount(va[i]) * sectionBytes + Integer.bitCount(vb[i]) * 2048 + 256;
+                    }
+                    if (expected == raw.length) {
+                        s26Primaries = a;
+                        s26Adds = b;
+                        ServerPacketGuard.LOG.info(
+                            "[AntiXRay] S26 field roles verified against packet data: primaries={}, adds={}",
+                            a.getName(), b.getName());
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            ServerPacketGuard.LOG.warn("[AntiXRay] S26 role resolution error: {}", e.toString());
+        }
+
+        s26ResolutionAttempts++;
+        if (s26ResolutionAttempts >= S26_MAX_RESOLUTION_ATTEMPTS) {
+            s26ResolutionFailed = true;
+            ServerPacketGuard.LOG.warn(
+                "[AntiXRay] Could not verify S26 primaries/adds fields after {} attempts — bulk chunk obfuscation DISABLED for this session.",
+                s26ResolutionAttempts);
+        }
+        return false;
     }
 
     static void buildProtectedIds() {
@@ -107,11 +160,12 @@ public class AntiXRayHandler extends ChannelOutboundHandlerAdapter {
         ServerPacketGuard.LOG.info("[AntiXRay] Total modded ores registered: {}", modded);
 
         if (S26_COMPRESSED != null) {
-            ServerPacketGuard.LOG.info("[AntiXRay] S26 fields found — compressed={}.{}, primaries={}, adds={}, length={}",
+            ServerPacketGuard.LOG.info(
+                "[AntiXRay] S26 fields found — compressed={}.{}, length={}, {} int[] candidate(s) for primaries/adds " +
+                "(roles verified against real packet data on first bulk chunk send)",
                 S26_COMPRESSED.getDeclaringClass().getSimpleName(), S26_COMPRESSED.getName(),
-                S26_PRIMARIES != null ? S26_PRIMARIES.getName() : "NOT FOUND",
-                S26_ADDS      != null ? S26_ADDS.getName()      : "NOT FOUND",
-                S26_LENGTH    != null ? S26_LENGTH.getName()    : "null (ok)");
+                S26_LENGTH != null ? S26_LENGTH.getName() : "null (ok)",
+                S26_INT_ARRAYS.size());
         } else {
             ServerPacketGuard.LOG.warn("[AntiXRay] S26 compressed byte[] field NOT FOUND — bulk chunk obfuscation DISABLED");
             ServerPacketGuard.LOG.warn("[AntiXRay] S26PacketMapChunkBulk declared fields:");
@@ -166,20 +220,10 @@ public class AntiXRayHandler extends ChannelOutboundHandlerAdapter {
     // -------------------------------------------------------------------------
 
     private void obfuscateS26(S26PacketMapChunkBulk packet, int sectionBytes) throws Exception {
-        if (S26_COMPRESSED == null || S26_PRIMARIES == null || S26_ADDS == null) return;
+        if (S26_COMPRESSED == null) return;
 
-        byte[] data      = (byte[]) S26_COMPRESSED.get(packet);
-        int[]  primaries = (int[])  S26_PRIMARIES.get(packet);
-        int[]  adds      = (int[])  S26_ADDS.get(packet);
-
-        if (data == null || data.length == 0 || primaries == null || adds == null) return;
-
-        int expectedRaw = 0;
-        for (int i = 0; i < primaries.length; i++) {
-            expectedRaw += Integer.bitCount(primaries[i]) * sectionBytes
-                         + Integer.bitCount(adds[i]) * 2048 + 256;
-        }
-        if (expectedRaw == 0) return;
+        byte[] data = (byte[]) S26_COMPRESSED.get(packet);
+        if (data == null || data.length == 0) return;
 
         byte[] raw;
         boolean wasCompressed;
@@ -188,16 +232,23 @@ public class AntiXRayHandler extends ChannelOutboundHandlerAdapter {
             wasCompressed = true;
         } catch (Exception inflateEx) {
             // Crucible хранит S26 несжатым — writePacketData сожмёт сам
-            if (data.length != expectedRaw) {
-                ServerPacketGuard.LOG.warn("[AntiXRay] S26 size mismatch: data={} expected={} — возможно неверные int[] поля. Пропускаем.", data.length, expectedRaw);
-                return;
-            }
             raw = data.clone();
             wasCompressed = false;
         }
 
+        if (!resolveS26Roles(packet, raw, sectionBytes)) return;
+
+        int[] primaries = (int[]) s26Primaries.get(packet);
+        int[] adds      = (int[]) s26Adds.get(packet);
+        if (primaries == null || adds == null || primaries.length != adds.length) return;
+
+        int expectedRaw = 0;
+        for (int i = 0; i < primaries.length; i++) {
+            expectedRaw += Integer.bitCount(primaries[i]) * sectionBytes
+                         + Integer.bitCount(adds[i]) * 2048 + 256;
+        }
         if (raw.length != expectedRaw) {
-            ServerPacketGuard.LOG.warn("[AntiXRay] S26 inflated size mismatch: raw={} expected={} — пропускаем.", raw.length, expectedRaw);
+            ServerPacketGuard.LOG.warn("[AntiXRay] S26 size mismatch: raw={} expected={} — пропускаем.", raw.length, expectedRaw);
             return;
         }
 

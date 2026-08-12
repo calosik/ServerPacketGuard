@@ -84,6 +84,9 @@ public class PacketValidatorHandler extends ChannelDuplexHandler {
                 default:                  return true;
             }
         } catch (Exception e) {
+            if (ModConfig.strictMode) {
+                return blockPacket((byte) 0, channel, "parse error in strict mode: " + e);
+            }
             return true;
         } finally {
             data.release();
@@ -270,7 +273,10 @@ public class PacketValidatorHandler extends ChannelDuplexHandler {
                         Math.sqrt(dx * dx + dy * dy + dz * dz)));
             }
         } catch (Exception e) {
-            // reflection fail — не блокируем
+            if (ModConfig.strictMode) {
+                return blockPacket((byte) 0, "vanilla", "block-place reflection failure in strict mode: " + e);
+            }
+            // reflection fail, non-strict — не блокируем
         }
         return true;
     }
@@ -291,7 +297,10 @@ public class PacketValidatorHandler extends ChannelDuplexHandler {
                         Math.sqrt(dx * dx + dy * dy + dz * dz)));
             }
         } catch (Exception e) {
-            // reflection fail — не блокируем
+            if (ModConfig.strictMode) {
+                return blockPacket((byte) 0, "vanilla", "entity-use reflection failure in strict mode: " + e);
+            }
+            // reflection fail, non-strict — не блокируем
         }
         return true;
     }
@@ -317,7 +326,8 @@ public class PacketValidatorHandler extends ChannelDuplexHandler {
 
     /**
      * Проверяет через WorldGuard 6.x (Bukkit/Cauldron), может ли игрок взаимодействовать
-     * с блоком по координатам. Если WG недоступен — пропускает (fail-open).
+     * с блоком по координатам. Если WG не установлен — пропускает (интеграция не применима).
+     * Если WG установлен, но проверка упала с ошибкой — поведение зависит от ModConfig.strictMode.
      *
      * WG 6.x API: getApplicableRegions принимает com.sk89q.worldedit.Vector,
      * а не org.bukkit.Location как в WG 5.x.
@@ -359,8 +369,11 @@ public class PacketValidatorHandler extends ChannelDuplexHandler {
 
             return (Boolean) regionSet.getClass()
                     .getMethod("canBuild", localPlayerClass).invoke(regionSet, localPlayer);
+        } catch (ClassNotFoundException e) {
+            return true; // WorldGuard/Bukkit API отсутствует — интеграция не применима, это не сбой
         } catch (Exception e) {
-            return true;
+            ServerPacketGuard.LOG.warn("[PacketGuard] WorldGuard check errored: {}", e.toString());
+            return !ModConfig.strictMode;
         }
     }
 

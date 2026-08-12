@@ -9,6 +9,8 @@ public class ModConfig {
     public static boolean exploitFilterEnabled = true;
     public static boolean reachCheckEnabled   = true;
     public static int     globalFmlRateLimit  = 100; // пакетов/сек на канал, 0 = выключено
+    public static boolean strictMode          = false;
+    public static int     antiXrayThreads     = 2;
 
     public static boolean blockEIOTeleport    = true;
     public static boolean blockEIOXpGrab      = true;
@@ -37,6 +39,8 @@ public class ModConfig {
         exploitFilterEnabled = config.getBoolean("exploitFilterEnabled",  G, true, "Exploit packet filter (master switch for all checks below)");
         reachCheckEnabled    = config.getBoolean("reachCheckEnabled",     G, true, "Block vanilla reach hacks (KillAura, reach cheats) — checks C02/C08 packets");
         globalFmlRateLimit   = config.getInt("globalFmlRateLimit",        G, 100, 0, 10000, "Max FML packets per second per channel (0 = disabled). Catches unknown exploits.");
+        strictMode           = config.getBoolean("strictMode",            G, false, "Fail-closed: block packets that fail to parse or trigger a reflection/integration error, instead of letting them through. Off by default to avoid false positives — enable once you've verified the filter behaves on your modpack.");
+        antiXrayThreads      = config.getInt("antiXrayThreads",           G, 2, 1, 8, "Worker threads for Anti-XRay chunk (de)compression, kept off the Netty I/O threads.");
 
         blockEIOTeleport   = config.getBoolean("blockEIOTeleport",   E, true, "Block EIOTeleport (enderio disc=56)");
         blockEIOXpGrab     = config.getBoolean("blockEIOXpGrab",     E, true, "Block EIOXpGrab Short.MAX_VALUE spam (enderio disc=69)");
