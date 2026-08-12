@@ -1,142 +1,55 @@
 # ServerPacketGuard
 
-A server-side Forge mod for Minecraft 1.7.10 that protects modded servers against cheat clients. Blocks X-ray exploits via chunk packet obfuscation and filters known exploit packets from malicious mods.
+Серверный мод для Forge (Minecraft 1.7.10), который защищает модовые сервера от читерских клиентов: подмешивает обфускацию чанков против X-ray и отфильтровывает известные пакеты-эксплойты от читерских модов.
 
-**Mod ID:** `serverpacketguard` | **Version:** 1.0.2 | **MC:** 1.7.10 | **Side:** Server only
+**Mod ID:** `serverpacketguard` | **Версия:** 1.0.2 | **MC:** 1.7.10 | **Сторона:** только сервер
 
----
-
-## Features
-
-### Anti-XRay
-Intercepts outgoing chunk packets at the Netty layer and replaces ore block IDs with stone before the data reaches the client. Since cheat clients like Xenobyte use `world.getBlock()` on the locally stored chunk data, they only see stone — the X-ray module shows nothing useful.
-
-- Protects vanilla ores: Diamond, Gold, Iron, Coal, Redstone, Lapis Lazuli, Emerald
-- Auto-discovers modded ores via `OreDictionary` (any registered entry with name starting with `"ore"`)
-- Handles both `S21PacketChunkData` (single chunk) and `S26PacketMapChunkBulk` (bulk load)
-- Compatible with Crucible servers (handles uncompressed chunk data)
-
-### Exploit Packet Filter
-Intercepts incoming `FMLProxyPacket` messages before the game processes them. Each check can be individually toggled in config.
-
-| Exploit | Channel | Packet | Action |
-|---|---|---|---|
-| EIO Teleport | `enderio` | disc=56 | Kick |
-| EIO XP Grab | `enderio` | disc=69 | Block + range check |
-| Machine Chaos | `enderio` | disc=1/76/96 | Rate limit (5–36/s) |
-| Crayfish Nuker | `cfm` | disc=14 | Rate limit (8/s) |
-| MFR Duplication | `MFReloaded` | type=20 | Kick |
-| MFR Rocket Spam | `MFReloaded` | type=11 | Rate limit (2/s) |
-| Galacticraft Fire | `GalacticraftCore` | type=7 | Rate limit (3/s) |
-| Turret Nuker | `openmodularturrets` | disc=9 | Rate limit (5/s) |
-| Dragons Radio Hack | `DragonsRadioMod` | disc=0 | Rate limit (2/10s) |
-| Mekanism Fire | `MEK` | disc=20 | Rate limit (3/s) |
-
-### Reach Check
-Validates `C02PacketUseEntity` and `C08PacketPlayerBlockPlacement` packets against the player's actual position. Blocks interactions beyond 7.0 blocks (vanilla max is ~5 blocks; the margin accounts for lag).
-
-### Global FML Rate Limit
-Optional per-channel packet rate limiter applied to all incoming FML packets. Default: 100 packets/second. Set to `0` to disable.
-
-### WorldGuard Integration
-When running on Cauldron/Thermos with WorldGuard 6.x present, the exploit filter additionally checks whether the interacting player has build permission at the target location before passing packets through. Uses reflection — fails open if WorldGuard is unavailable.
-
-### Admin Command
-```
-/spg reload
-```
-Hot-reloads the configuration file without restarting the server. Requires operator level 2. Prints the current state of all feature flags to chat.
+▶️ **Демонстрация работы мода:** https://www.youtube.com/watch?v=ZTwfc2r4rPs
 
 ---
 
-## Installation
+## ⚠️ Это набросок, а не готовый продукт
 
-1. Install [Cauldron](https://sourceforge.net/projects/cauldron-unofficial/files/) or [Thermos](https://github.com/CyberdyneCC/Thermos) for Minecraft 1.7.10.
-2. Drop `ServerPacketGuard-1.0.2.jar` into the `mods/` folder.
-3. Start the server — a config file is generated at `config/serverpacketguard.cfg`.
+Репозиторий выложен как черновик/прототип для сообщества — реализован не весь задуманный функционал, часть фич сырая и требует доработки. Не рассчитывайте на «поставил и забыл»: перед использованием на живом сервере тестируйте на своей сборке модов.
 
-> **Server-side only.** Clients do not need this mod installed. `acceptableRemoteVersions = "*"` is set so clients without the mod can connect normally.
-
----
-
-## Configuration
-
-Config file: `config/serverpacketguard.cfg`
-
-```properties
-# General
-antiXrayEnabled         = true   # Chunk packet ore obfuscation
-exploitFilterEnabled    = true   # Master switch for all exploit checks
-reachCheckEnabled       = true   # C02/C08 reach validation
-globalFmlRateLimit      = 100    # Max FML packets/s per channel (0 = off)
-
-# Exploit-specific (all default true)
-blockEIOTeleport        = true
-blockEIOXpGrab          = true
-blockMachineChaos       = true
-blockCrayfishNuker      = true
-blockFactoryDupe        = true
-blockFactoryRocket      = true
-blockGalacticFire       = true
-blockTurretNuker        = true
-blockRadioHack          = true
-blockMekFire            = true
-```
-
-After editing, run `/spg reload` to apply changes without a restart.
+- **Anti-X-Ray в статусе беты.** Подмена руды на камень в пакетах чанков — это эвристика, а не идеальное решение. От неё могут страдать и обычные, честные игроки (визуальные баги, рассинхрон чанков после подмены блоков, лишняя нагрузка на CPU при (де)компрессии). Используйте с пониманием, что это компромисс, а не гарантия.
+- **Фильтр пакетных читов ловит не всё.** Это список конкретных сигнатур под конкретные версии конкретных модов — при обновлении модов или появлении новых чит-клиентов сигнатуры перестают совпадать и дыра остаётся открытой. Мод не заменяет ручной аудит: дыры в самих модпаках (баги дюпа, читерские каналы FML и т.п.) всё равно нужно закрывать руками — патчить/конфигурировать сами проблемные моды, а не полагаться только на этот фильтр.
 
 ---
 
-## How It Works
+## Что умеет (кратко)
 
-### Anti-XRay Pipeline
+- **Anti-XRay** — на лету подменяет ID руды на камень в исходящих пакетах чанков (`S21PacketChunkData`, `S26PacketMapChunkBulk`), включая ванильные и модовые руды через `OreDictionary`.
+- **Фильтр пакетов-эксплойтов** — блокирует/лимитирует известные читерские пакеты ряда популярных модов (EnderIO, MFR, Galacticraft, Crayfish, Mekanism и др.), список правил настраивается в конфиге.
+- **Reach Check** — отклоняет взаимодействия/установку блоков дальше ~7 блоков от игрока.
+- **Глобальный рейт-лимит FML-пакетов** — защита от спама произвольными кастомными пакетами.
+- **Интеграция с WorldGuard** (Cauldron/Thermos + WG 6.x) — дополнительно проверяет право на постройку в точке взаимодействия.
+- **Команда `/spg reload`** — горячая перезагрузка конфига без рестарта сервера (нужен op-уровень 2).
 
-```
-Client ← [AntiXRayHandler] ← [packet_handler] ← Server
-```
-
-`AntiXRayHandler` is a `ChannelOutboundHandlerAdapter` injected **after** `packet_handler` in the Netty pipeline. It sees fully encoded `S21`/`S26` packets, decompresses the chunk data with `Inflater`, iterates every block position in each active section, replaces protected ore IDs with stone (`ID=1`), zeroes out their metadata and add-nibbles, then recompresses with `Deflater` at `BEST_SPEED` level.
-
-### Exploit Filter Pipeline
-
-```
-[PacketValidatorHandler] → [packet_handler] → Server
-Client →
-```
-
-`PacketValidatorHandler` is a `ChannelDuplexHandler` injected **before** `packet_handler`. It reads the `FMLProxyPacket` channel tag and `discriminator` byte, applies the relevant check, and either calls `super.channelRead()` (pass) or swallows the message and optionally disconnects the player.
-
-### Per-Player Injection
-
-Both handlers are injected into each player's individual Netty channel on `PlayerLoggedInEvent`:
-
-```
-[spg_filter_<player>] → [packet_handler] → [spg_xray_<player>]
-```
+Подробности конфигурации, пайплайна Netty-хендлеров и таблицу совместимости смотрите в коде/issues — здесь только обзорная версия для форума.
 
 ---
 
-## Building
+## Установка
 
-Requires Java 8 and Gradle.
+1. Поставьте [Cauldron](https://sourceforge.net/projects/cauldron-unofficial/files/) или [Thermos](https://github.com/CyberdyneCC/Thermos) для 1.7.10.
+2. Положите `ServerPacketGuard-1.0.2.jar` в папку `mods/`.
+3. Запустите сервер — конфиг сгенерируется в `config/serverpacketguard.cfg`.
+
+> Мод серверный: клиентам ставить его не нужно (`acceptableRemoteVersions = "*"`).
+
+---
+
+## Сборка из исходников
 
 ```bash
 ./gradlew build
 ```
 
-Output jar: `build/libs/ServerPacketGuard-1.0.2.jar`
-
-Uses [anatawa12's ForgeGradle](https://github.com/anatawa12/ForgeGradle-1.2) fork for Forge 1.7.10 compatibility.
+Собранный jar: `build/libs/ServerPacketGuard-1.0.2.jar`. Используется форк [anatawa12's ForgeGradle](https://github.com/anatawa12/ForgeGradle-1.2) для совместимости с Forge 1.7.10.
 
 ---
 
-## Compatibility
+## Обратная связь
 
-| Software | Status |
-|---|---|
-| Cauldron 1.7.10 | Supported |
-| Thermos 1.7.10 | Supported |
-| Crucible 1.7.10 | Supported (uncompressed chunk data handled) |
-| WorldGuard 5.x | Detected, WG checks skipped (API mismatch) |
-| WorldGuard 6.x | Full integration |
-| Vanilla Forge server | Supported (no WorldGuard features) |
+Это черновой релиз — баг-репорты, идеи и пул-реквесты приветствуются. Если нашли дыру, которую фильтр не ловит, сообщите issue: скорее всего понадобится доработать сигнатуру или закрыть проблему на стороне самого мода-виновника.
